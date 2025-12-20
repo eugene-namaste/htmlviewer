@@ -1,0 +1,843 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Osceola Fire Protection Letter</title>
+
+  <link rel="stylesheet" href="https://js.arcgis.com/4.30/esri/themes/light/main.css" />
+
+  <style>
+    html, body, #viewDiv { height: 100%; width: 100%; margin: 0; padding: 0; }
+
+    /* Bigger Search box */
+    .esri-search { width: min(480px, calc(100vw - 24px)); }
+
+    /* White background, red outline, subtle shadow */
+    .esri-search__container {
+      background: rgba(255, 255, 255, 0.97);
+      border: 2px solid #d40000;
+      border-radius: 10px;
+      box-shadow:
+        0 2px 6px rgba(0, 0, 0, 0.15),
+        0 8px 20px rgba(0, 0, 0, 0.08);
+    }
+
+    .esri-search__input { height: 46px; font-size: 16px; }
+
+    /* Loading spinner */
+    .loading {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 14px;
+    }
+    .spinner {
+      width: 18px;
+      height: 18px;
+      border: 3px solid #ddd;
+      border-top: 3px solid #555;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+
+  <script src="https://js.arcgis.com/4.30/"></script>
+
+  <script>
+    require([
+      "esri/config",
+      "esri/Map",
+      "esri/views/MapView",
+      "esri/widgets/Search",
+      "esri/layers/FeatureLayer",
+      "esri/geometry/Extent",
+      "esri/Graphic",
+      "esri/widgets/Popup",
+      "esri/core/Collection",
+      "esri/rest/route",
+      "esri/rest/support/RouteParameters",
+      "esri/rest/support/FeatureSet"
+    ], (
+      esriConfig,
+      Map, MapView, Search, FeatureLayer, Extent, Graphic,
+      Popup, Collection,
+      route, RouteParameters, FeatureSet
+    ) => {
+
+      // =========================================================
+      // CONFIG
+      // =========================================================
+      const ENV = "prod"; // "dev" or "prod"
+
+      if (ENV === "prod") {
+        esriConfig.apiKey = "AAPTxy8BH1VEsoebNVZXo8HurByrRCVZ4qLazax4sNet_bxC1DlAF99E6fwyGxDio5lwFj96zDymWq1roI2HD-2C9AteXzIDwI6PC-cUx9DH-0Lgn-qlRgmwhULr1UH5hVUBMKWWs4Wp6-gKF4PtwqGAZbANpGSdEbWYezd2kKQapc0E8Ret6sP-MWAvC6TSl02n9w7lT9ay-5XPbLy6S2r-tVTM_gluWbIIXKYVtfMqn5PHj4U8FmlepirlNJuoNd5LAT1_ZAjxFEUo";
+      }
+
+      // =========================================================
+      // BASEMAP OPTIONS
+      // =========================================================
+
+      // Default (current)
+      //const BASEMAP = "topo-vector";
+
+      // Alternative options (commented out for easy switching)
+      // const BASEMAP = "satellite";          // Imagery
+      // const BASEMAP = "community";          // Community Map
+      const BASEMAP = "osm";                // OpenStreetMap
+
+      const ROUTE_URL = (ENV === "dev")
+        ? "https://namaste.esri.com/server/rest/services/Routing/NetworkAnalysis/NAServer/Route"
+        : "https://route.arcgis.com/arcgis/rest/services/World/Route/NAServer/Route_World";
+
+      const GEOCODER_URL = "https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer";
+
+      const FIRE_ZONES_URL =
+        "https://services1.arcgis.com/ejbgqcCL0yNBugWr/arcgis/rest/services/Osceola_fire_zones_stations/FeatureServer/1";
+
+      const FIRE_STATIONS_URL =
+        "https://services1.arcgis.com/ejbgqcCL0yNBugWr/arcgis/rest/services/Osceola_fire_zones_stations/FeatureServer/0";
+
+      const ISO_FIRE_REQUESTS_URL =
+        "https://services1.arcgis.com/ejbgqcCL0yNBugWr/arcgis/rest/services/iso_fire_requests/FeatureServer/0";
+
+      // =========================================================
+      // SPECIAL ZONES (Externally handled jurisdictions)
+      // =========================================================
+      const SPECIAL_ZONES = {
+        ST42K: {
+          message:
+            "Please reach out to <a href='mailto:chris.alessandri@kissimmee.gov'>chris.alessandri@kissimmee.gov</a> for your request."
+        }
+
+        // Future examples:
+        // ST99X: {
+        //   message:
+        //     "Please contact City Fire Department at fire@city.gov for assistance."
+        // }
+      };
+
+      const ISO_FIELD_MAP = {
+        address: "Address_Requested",
+        requestDate: "Request_Date",
+        fireZone: "Fire_Zone_ID",
+        fireStation: "Fire_Station",
+        distanceMiles: "Driving_Distance",
+        protectionClass: "Protection_Rate",
+        requestId: "Request_ID"
+      };
+
+      const FIELD_LABELS = {
+        ZONEID: "Fire Zone",
+        COMPANY: "Fire Station",
+        NAME: "Fire Station Name",
+        ADDRESS: "Fire Station Address",
+        CITY: "Fire Station City",
+        PHONE: "Phone",
+        APPARATUS: "Fire Apparatus",
+        JURISDICTI: "Jurisdiction",
+        ENGINE_GAL: "Engine - gallon",
+        TANKER_GAL: "Tanker - gallon",
+        BRUSHTANKE: "Brush Tanker - gallon",
+        LADDER: "Ladder - gallon"
+      };
+
+      // Optional: adjust to customer extent
+      const osceolaExtent = new Extent({
+        xmin: -81.65, ymin: 27.85,
+        xmax: -81.00, ymax: 28.40,
+        spatialReference: { wkid: 4326 }
+      });
+
+      // =========================================================
+      // STATE
+      // =========================================================
+      let lookupInFlight = false;
+      let lastLookupKey = null;
+      let lastLookupAt = 0;
+
+      let lastLetterData = null;       // one source of truth for print + logging
+      let lastAddressPoint = null;     // latest address point from Search
+
+      const loggedRequestIds = new Set();
+      let logInFlight = false;
+
+      // =========================================================
+      // MAP / VIEW / POPUP
+      // =========================================================
+      const map = new Map({ basemap: BASEMAP });
+
+      const popup = new Popup({ dockEnabled: false });
+
+      const view = new MapView({
+        container: "viewDiv",
+        map,
+        center: [-81.32, 28.10],
+        zoom: 10,
+        popup
+      });
+
+      // =========================================================
+      // LAYERS
+      // =========================================================
+      const isoFireRequests = new FeatureLayer({
+        url: ISO_FIRE_REQUESTS_URL,
+        outFields: ["*"],
+        apiKey: esriConfig.apiKey,
+        visible: false
+      });
+      map.add(isoFireRequests);
+
+      const fireZones = new FeatureLayer({
+        url: FIRE_ZONES_URL,
+        outFields: ["ZONEID"],
+        visible: false
+      });
+      map.add(fireZones);
+
+      const fireStations = new FeatureLayer({
+        url: FIRE_STATIONS_URL,
+        outFields: [
+          "COMPANY", "NAME", "ADDRESS", "CITY", "PHONE",
+          "APPARATUS", "JURISDICTI",
+          "ENGINE_GAL", "TANKER_GAL", "BRUSHTANKE", "LADDER",
+          "FIRST_RESP"
+        ],
+        visible: false
+      });
+      map.add(fireStations);
+
+      // =========================================================
+      // SEARCH WIDGET
+      // =========================================================
+      const searchWidget = new Search({
+        view,
+        includeDefaultSources: false,
+        popupEnabled: false,
+        placeholder: "Enter an address to get fire protection category",
+        sources: [{
+          url: GEOCODER_URL,
+          singleLineFieldName: "SingleLine",
+          name: "Address Search",
+          placeholder: "Enter an address to get fire protection category",
+          countryCode: "US",
+          categories: ["Address"],
+          searchExtent: osceolaExtent
+        }]
+      });
+
+      view.ui.add(searchWidget, { position: "top-left", index: 0 });
+
+      // =========================================================
+      // POPUP ACTION (Print Letter)
+      // =========================================================
+      const printLetterAction = {
+        id: "print-letter",
+        title: "Print Letter",
+        className: "esri-icon-printer"
+      };
+
+      view.when(() => {
+        if (!view.popup.actions) view.popup.actions = new Collection();
+        hidePrintAction();
+
+        popup.on("trigger-action", async (event) => {
+          if (event.action?.id !== "print-letter") return;
+          if (!lastLetterData) {
+            alert("No letter data available yet. Search an address first.");
+            return;
+          }
+
+          // Hard-stop duplicates on Request_ID (client-side)
+          const rid = lastLetterData.requestId;
+          if (loggedRequestIds.has(rid) || lastLetterData.__logged === true) {
+            openPrintLetter(lastLetterData);
+            return;
+          }
+
+          // Stop rapid re-entry
+          if (logInFlight) return;
+          logInFlight = true;
+
+          // Mark as logged immediately
+          lastLetterData.__logged = true;
+          loggedRequestIds.add(rid);
+
+          try {
+            console.log("Logging point:", lastLetterData.addressPoint);
+
+            await saveIsoRequest({
+              requestId: lastLetterData.requestId,
+              addressLabel: lastLetterData.addressLabel,
+              zoneId: lastLetterData.zoneId,
+              stationName: lastLetterData.station?.company ?? null,
+              distanceMiles: lastLetterData.miles ?? null,
+              protectionClass: lastLetterData.protectionClass,
+              point: lastLetterData.addressPoint
+            });
+
+          } catch (e) {
+            console.warn("iso_fire_requests logging failed:", e);
+            // Allow retry if add truly failed
+            lastLetterData.__logged = false;
+            loggedRequestIds.delete(rid);
+
+          } finally {
+            logInFlight = false;
+          }
+
+          openPrintLetter(lastLetterData);
+        });
+      });
+
+      function showPrintAction() {
+        if (!view.popup?.actions) return;
+        view.popup.actions.removeAll();
+        view.popup.actions.add(printLetterAction);
+      }
+
+      function hidePrintAction() {
+        if (view.popup?.actions) view.popup.actions.removeAll();
+      }
+
+      // =========================================================
+      // GRAPHICS HELPERS
+      // =========================================================
+      const addressMarkerSymbol = {
+        type: "simple-marker",
+        style: "circle",
+        size: 10,
+        color: [0, 122, 255, 1],
+        outline: { color: [255, 255, 255, 1], width: 2 }
+      };
+
+      function clearTempGraphics() {
+        const toRemove = view.graphics.filter(g => g.attributes?.__temp === true);
+        view.graphics.removeMany(toRemove);
+      }
+
+      function addTempGraphic(geometry, symbol) {
+        const g = new Graphic({ geometry, symbol, attributes: { __temp: true } });
+        view.graphics.add(g);
+        return g;
+      }
+
+      function highlightZone(zoneGeometry) {
+        addTempGraphic(zoneGeometry, {
+          type: "simple-fill",
+          color: [255, 140, 0, 0.15],
+          outline: { color: [255, 140, 0, 1], width: 2 }
+        });
+      }
+
+      // =========================================================
+      // UTILS
+      // =========================================================
+      function escapeHtml(s) {
+        return String(s ?? "")
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;")
+          .replaceAll("'", "&#039;");
+      }
+
+      function sqlEscape(value) {
+        return String(value ?? "").replaceAll("'", "''");
+      }
+
+      function formatDateLong(d = new Date()) {
+        return d.toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" });
+      }
+
+      function imgTagOrEmpty(src, className, alt = "") {
+        if (!src) return "";
+        return `<img class="${className}" src="${src}" alt="${escapeHtml(alt)}" />`;
+      }
+
+      function getProtectionClass(distanceMiles) {
+        if (distanceMiles == null || Number.isNaN(distanceMiles)) return "(not available)";
+        if (distanceMiles <= 5) return "Protection Class 3";
+        if (distanceMiles > 5 && distanceMiles < 10) return "Protection Class 10W";
+        return "Protection Class 10";
+      }
+
+      // =========================================================
+      // POPUPS
+      // =========================================================
+
+      function showSpecialZonePopup(addressLabel, locationPoint, zoneId) {
+        hidePrintAction();
+        lastLetterData = null;
+
+        const zoneConfig = SPECIAL_ZONES[zoneId];
+
+        view.openPopup({
+          title: "Fire Response Lookup",
+          location: locationPoint,
+          content: `
+            <b>The Address:</b> ${escapeHtml(addressLabel)}<br/>
+            <b>Fire Zone:</b> ${escapeHtml(zoneId)}<br/><br/>
+            ${zoneConfig?.message ?? "This address is handled by an external jurisdiction."}
+          `
+        });
+      }
+
+      function showLoadingPopup(locationPoint) {
+        hidePrintAction();
+        lastLetterData = null;
+
+        view.openPopup({
+          title: "Fire Response Lookup",
+          location: locationPoint,
+          content: `
+            <div class="loading">
+              <div class="spinner"></div>
+              <div>Looking up fire protection information…</div>
+            </div>
+          `
+        });
+      }
+
+      function showNoServicePopup(addressLabel, locationPoint) {
+        hidePrintAction();
+        lastLetterData = null;
+
+        view.openPopup({
+          title: "Fire Response Lookup",
+          location: locationPoint,
+          content:
+            `<b>The Address:</b> ${escapeHtml(addressLabel)}<br/><br/>
+             is not in Osceola Fire Protection Zone or No Fire Station is assigned.`
+        });
+      }
+
+      function showResultPopup({ addressLabel, locationPoint, zoneId, station, miles, protectionClass }) {
+        const distanceText = (miles == null) ? "(not available)" : `${miles.toFixed(2)} miles`;
+
+        // Prepare letter data ONCE here (single source of truth)
+        lastLetterData = {
+          requestId: crypto.randomUUID(),
+          __logged: false,
+          addressLabel,
+          addressPoint: lastAddressPoint,
+          zoneId,
+          station,
+          miles,
+          protectionClass,
+
+          // water capacities
+          engine: station?.engine ?? null,
+          tanker: station?.tanker ?? null,
+          brushtanker: station?.brushtanker ?? null,
+          ladder: station?.ladder ?? null,
+
+          // assets
+          logoSrc: "images/osceola_logo.png",
+          signatureSrc: "images/chief_signature.png"
+        };
+
+        showPrintAction();
+
+        view.openPopup({
+          title: "Fire Response Lookup",
+          location: locationPoint,
+          content: `
+            <div style="line-height:1.5">
+              <div><b>Address:</b> ${escapeHtml(addressLabel)}</div>
+              <div><b>${FIELD_LABELS.ZONEID}:</b> ${escapeHtml(zoneId)}</div>
+              <div><b>Protection Class:</b> ${escapeHtml(protectionClass)}</div>
+              <br/>
+              <div><b>${FIELD_LABELS.COMPANY}:</b> ${escapeHtml(station?.company)}</div>
+              <div><b>${FIELD_LABELS.NAME}:</b> ${escapeHtml(station?.name)}</div>
+              <div><b>${FIELD_LABELS.ADDRESS}:</b> ${escapeHtml(station?.address)}</div>
+              <div><b>${FIELD_LABELS.CITY}:</b> ${escapeHtml(station?.city)}</div>
+              <div><b>${FIELD_LABELS.PHONE}:</b> ${escapeHtml(station?.phone)}</div>
+              <div><b>${FIELD_LABELS.APPARATUS}:</b> ${escapeHtml(station?.apparatus ?? "(not found)")}</div>
+              <div><b>${FIELD_LABELS.JURISDICTI}:</b> ${escapeHtml(station?.juris ?? "(not found)")}</div>
+              <div><b>${FIELD_LABELS.ENGINE_GAL}:</b> ${escapeHtml(station?.engine)}</div>
+              <div><b>${FIELD_LABELS.TANKER_GAL}:</b> ${escapeHtml(station?.tanker)}</div>
+              <div><b>${FIELD_LABELS.BRUSHTANKE}:</b> ${escapeHtml(station?.brushtanker)}</div>
+              <div><b>${FIELD_LABELS.LADDER}:</b> ${escapeHtml(station?.ladder)}</div>
+              <br/>
+              <div><b>Driving distance to station:</b> ${escapeHtml(distanceText)}</div>
+            </div>
+          `
+        });
+      }
+
+      // =========================================================
+      // DATA QUERIES / ROUTING
+      // =========================================================
+      async function getZoneAtPoint(point) {
+        const q = fireZones.createQuery();
+        q.geometry = point;
+        q.spatialRelationship = "intersects";
+        q.returnGeometry = true;
+        q.outFields = ["ZONEID"];
+        q.num = 1;
+
+        const res = await fireZones.queryFeatures(q);
+        const feature = res.features?.[0] || null;
+        if (!feature) return null;
+
+        return { zoneId: feature.attributes?.ZONEID || null, geometry: feature.geometry };
+      }
+
+      function pickStation(features) {
+        if (!features?.length) return null;
+        const preferred = features.find(f => {
+          const v = f.attributes?.FIRST_RESP;
+          return v === "Y" || v === "Yes" || v === 1 || v === "1" || v === true;
+        });
+        return preferred || features[0];
+      }
+
+      async function getStationForZone(zoneGeometry) {
+        const q = fireStations.createQuery();
+        q.geometry = zoneGeometry;
+        q.spatialRelationship = "intersects";
+        q.returnGeometry = true;
+        q.outFields = fireStations.outFields;
+        q.num = 50;
+
+        const res = await fireStations.queryFeatures(q);
+        const f = pickStation(res.features);
+        if (!f) return null;
+
+        const a = f.attributes || {};
+        return {
+          company: a.COMPANY || null,
+          name: a.NAME || null,
+          address: a.ADDRESS || null,
+          city: a.CITY || null,
+          phone: a.PHONE || null,
+          apparatus: a.APPARATUS || null,
+          juris: a.JURISDICTI || null,
+          engine: a.ENGINE_GAL || null,
+          tanker: a.TANKER_GAL || null,
+          brushtanker: a.BRUSHTANKE || null,
+          ladder: a.LADDER || null,
+          geometry: f.geometry
+        };
+      }
+
+      async function getDrivingDistanceMiles(fromPoint, toPoint) {
+        const params = new RouteParameters({
+          stops: new FeatureSet({
+            features: [
+              new Graphic({ geometry: fromPoint }),
+              new Graphic({ geometry: toPoint })
+            ]
+          }),
+          returnDirections: false,
+          returnRoutes: true,
+          outputLines: "true-shape"
+        });
+
+        const r = await route.solve(ROUTE_URL, params);
+        const attrs = r?.routeResults?.[0]?.route?.attributes || {};
+
+        if (attrs.Total_Miles != null) return attrs.Total_Miles;
+        if (attrs.Total_Kilometers != null) return attrs.Total_Kilometers * 0.621371;
+        return null;
+      }
+
+      // =========================================================
+      // ISO FIRE REQUEST LOGGING (idempotent + geometry)
+      // =========================================================
+      async function saveIsoRequest({
+        requestId,
+        addressLabel,
+        zoneId,
+        stationName,
+        distanceMiles,
+        protectionClass,
+        point
+      }) {
+        try {
+          await isoFireRequests.load();
+
+          // idempotency check (REQUEST_ID)
+          const rid = String(requestId || "");
+          if (!rid) return;
+
+          const q = isoFireRequests.createQuery();
+          q.where = `${ISO_FIELD_MAP.requestId} = '${sqlEscape(rid)}'`;
+          q.returnGeometry = false;
+          q.outFields = [isoFireRequests.objectIdField];
+          q.num = 1;
+
+          const existing = await isoFireRequests.queryFeatures(q);
+          if (existing.features?.length) return;
+
+          if (!point) {
+            console.warn("saveIsoRequest: missing point geometry; skipping add.");
+            return;
+          }
+
+          const attrs = {};
+          attrs[ISO_FIELD_MAP.requestId] = rid;
+          attrs[ISO_FIELD_MAP.address] = addressLabel ?? null;
+          attrs[ISO_FIELD_MAP.requestDate] = Date.now();
+          attrs[ISO_FIELD_MAP.fireZone] = zoneId ?? null;
+          attrs[ISO_FIELD_MAP.fireStation] = stationName ?? null;
+          attrs[ISO_FIELD_MAP.distanceMiles] = (distanceMiles == null ? null : Number(distanceMiles));
+          attrs[ISO_FIELD_MAP.protectionClass] = protectionClass ?? null;
+
+          const res = await isoFireRequests.applyEdits({
+            addFeatures: [{ geometry: point, attributes: attrs }]
+          });
+
+          const r0 = res?.addFeatureResults?.[0];
+          if (r0?.error) console.warn("iso_fire_requests add failed:", r0.error);
+        } catch (e) {
+          console.warn("Failed to save iso_fire_request:", e);
+        }
+      }
+
+      // =========================================================
+      // PRINT LETTER
+      // =========================================================
+      function buildLetterHtml({
+        addressLabel,
+        zoneId,
+        station,
+        miles,
+        protectionClass,
+        logoSrc = null,
+        signatureSrc = null,
+        engine = "",
+        tanker = "",
+        brushtanker = "",
+        ladder = ""
+      }) {
+        const issuedDate = formatDateLong(new Date());
+        const distanceText = (miles == null) ? "(distance unavailable)" : `${miles.toFixed(2)} miles`;
+        const company = station?.company ?? "";
+
+        const logoImgHtml = imgTagOrEmpty(logoSrc, "logo-img", "Osceola County");
+        const sigImgHtml  = imgTagOrEmpty(signatureSrc, "signature-img", "Signature");
+
+        function hasGallons(v) {
+          if (v == null) return false;
+          const s = String(v).trim();
+          if (!s) return false;
+          const low = s.toLowerCase();
+          return !(low === "n/a" || low === "na" || low === "none");
+        }
+
+        const parts = [];
+        if (hasGallons(engine)) parts.push(`Engine ${escapeHtml(company)} carries ${escapeHtml(engine)} gallons of water`);
+        if (hasGallons(tanker)) parts.push(`tanker carries ${escapeHtml(tanker)} gallons of water`);
+        if (hasGallons(brushtanker)) parts.push(`brush tanker carries ${escapeHtml(brushtanker)} gallons of water`);
+        if (hasGallons(ladder)) parts.push(`ladder carries ${escapeHtml(ladder)} gallons of water`);
+        const apparatusSentence = parts.length ? parts.join(", ") + "." : "";
+
+        return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Fire Protection Letter</title>
+  <style>
+    body { font-family: "Times New Roman", Times, serif; font-size: 12pt; line-height: 1.4; margin: 0; padding: 0; color: #111; }
+    .page { width: 8.5in; min-height: 11in; margin: 0.5in auto; padding: 0.5in; box-sizing: border-box; display: flex; flex-direction: row; }
+    .left-column { width: 2.2in; padding-right: 0.2in; border-right: 4px solid red; box-sizing: border-box; text-align: center; font-size: 9pt; }
+    .logo-img { width: 1.6in; height: auto; margin-bottom: 0.15in; }
+    .left-title { font-weight: bold; font-size: 11pt; margin-bottom: 0.15in; }
+    .left-dept { font-style: italic; margin-bottom: 0.28in; }
+    .left-osceola { font-weight: bold; font-size: 16pt; color: #004c99; margin-top: 0.3in; }
+    .right-column { flex: 1; padding-left: 0.3in; box-sizing: border-box; font-size: 12pt; }
+    .date { text-align: right; margin-bottom: 0.35in; }
+    .signature-block { margin-top: 0.6in; }
+    .signature-img { width: 2.4in; height: auto; display: block; margin-bottom: 0.1in; }
+    .motto { text-align: center; margin-top: 0.35in; font-weight: bold; color: #003366; }
+    @media print { .page { margin: 0; } }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <div class="left-column">
+      ${logoImgHtml}
+      <div class="left-title">BOARD<br/>OF<br/>COUNTY<br/>COMMISSIONERS</div>
+      <div class="left-dept">
+        Department of Fire Rescue<br/>
+        and Emergency Medical Services<br/>
+        2586 Partin Settlement Rd.<br/>
+        Kissimmee, FL 34744<br/>
+        Phone (407) 742-7000<br/>
+        Fax (407) 742-6860<br/><br/>
+        Larry Collier<br/>
+        Fire Chief / Director<br/><br/>
+        Jon Haskett<br/>
+        Division Chief / Operations<br/><br/>
+      </div>
+      <div class="left-osceola">Osceola<br/>County</div>
+    </div>
+
+    <div class="right-column">
+      <div class="date">${escapeHtml(issuedDate)}</div>
+
+      <p>To Whom It May Concern:</p>
+
+      <p>
+        Fire protection for this property is provided by Osceola County Fire ${escapeHtml(company)}.
+        The responding station is located ${escapeHtml(distanceText)} from the requested address.
+      </p>
+
+      <p>
+        There is a "Credible Water Source" meeting the current requirements for the
+        Insurance Services Offices, Inc. (ISO).
+      </p>
+
+      <p>
+        Pursuant to your request, our review found that the property located at
+        <strong>${escapeHtml(addressLabel)}</strong> is rated <strong>${escapeHtml(protectionClass)}</strong>.
+      </p>
+
+      ${apparatusSentence ? `
+      <p>
+        The first responding units are:<br/>
+        ${apparatusSentence}
+      </p>` : ""}
+
+      <p>In the event of a fire, additional fire department equipment will respond to assist as needed.</p>
+
+      <p>
+        All Osceola County fire stations are staffed 24 hours a day, 365 days a year
+        with professional career firefighters.
+      </p>
+
+      <p>If additional information is required, please do not hesitate to contact me.</p>
+
+      <div class="signature-block">
+        <p>Yours in Fire Safety,</p>
+        <br/>
+        ${sigImgHtml}
+        <p>
+          Larry Collier<br/>
+          Fire Chief<br/>
+          Osceola County Fire Rescue and EMS<br/>
+          1 Courthouse Sq, Suite 1400<br/>
+          Kissimmee, FL 34741<br/>
+          (407) 742-6700 Office
+        </p>
+      </div>
+
+      <div class="motto">Dedicated • Professional • Quality • Caring Service</div>
+    </div>
+  </div>
+</body>
+</html>`;
+      }
+
+      function openPrintLetter(data) {
+        const w = window.open("about:blank", "_blank");
+        if (!w) {
+          alert("Popup blocked. Please allow popups for this site.");
+          return;
+        }
+        const html = buildLetterHtml(data);
+        w.document.open();
+        w.document.write(html);
+        w.document.close();
+        w.focus();
+        setTimeout(() => w.print(), 250);
+      }
+
+      // =========================================================
+      // MAIN HANDLER
+      // =========================================================
+      searchWidget.on("select-result", async (evt) => {
+        if (lookupInFlight) return;
+        lookupInFlight = true;
+
+        const addressLabel = evt?.result?.name || "Selected address";
+        const addressPoint = evt?.result?.feature?.geometry;
+        lastAddressPoint = addressPoint;
+
+        if (!addressPoint) {
+          lookupInFlight = false;
+          lastAddressPoint = null;
+          return;
+        }
+
+        // Basic anti-double-fire for select-result
+        const key = `${addressLabel}`;
+        const now = Date.now();
+        if (key === lastLookupKey && (now - lastLookupAt) < 8000) {
+          lookupInFlight = false;
+          return;
+        }
+        lastLookupKey = key;
+        lastLookupAt = now;
+
+        showLoadingPopup(addressPoint);
+
+        clearTempGraphics();
+        addTempGraphic(addressPoint, addressMarkerSymbol);
+
+        try {
+          const zone = await getZoneAtPoint(addressPoint);
+
+          // No zone found
+          if (!zone?.zoneId) {
+            showNoServicePopup(addressLabel, addressPoint);
+            return;
+          }
+
+          // Special externally handled zones
+          if (SPECIAL_ZONES[zone.zoneId]) {
+            showSpecialZonePopup(addressLabel, addressPoint, zone.zoneId);
+            return;
+          }
+
+          highlightZone(zone.geometry);
+
+          const station = await getStationForZone(zone.geometry);
+          if (!station?.company) {
+            showNoServicePopup(addressLabel, addressPoint);
+            return;
+          }
+
+          const miles = station.geometry
+            ? await getDrivingDistanceMiles(addressPoint, station.geometry)
+            : null;
+
+          const protectionClass = getProtectionClass(miles);
+
+          showResultPopup({
+            addressLabel,
+            locationPoint: addressPoint,
+            zoneId: zone.zoneId,
+            station,
+            miles,
+            protectionClass
+          });
+
+        } catch (err) {
+          console.error(err);
+          hidePrintAction();
+          lastLetterData = null;
+
+          view.openPopup({
+            title: "Fire Response Lookup",
+            location: addressPoint,
+            content: `<b>Address:</b> ${escapeHtml(addressLabel)}<br/><br/>
+                      Error performing lookup. Check console for details.`
+          });
+
+        } finally {
+          lookupInFlight = false;
+        }
+      });
+
+    });
+  </script>
+</head>
+
+<body>
+  <div id="viewDiv"></div>
+</body>
+</html>

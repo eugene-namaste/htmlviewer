@@ -635,6 +635,11 @@
         if (hasGallons(ladder)) parts.push(`ladder carries ${escapeHtml(ladder)} gallons of water`);
         const apparatusSentence = parts.length ? parts.join(", ") + "." : "";
 
+        // Determine credible water source text based on protection class
+        const credibleWaterText = (protectionClass === "Protection Class 10")
+          ? 'There is NOT a "Credible Water Source" meeting the current requirements for the Insurance Services Offices, Inc. (ISO).'
+          : 'There is a "Credible Water Source" meeting the current requirements for the Insurance Services Offices, Inc. (ISO).';
+
         return `<!DOCTYPE html>
 <html>
 <head>
@@ -687,8 +692,7 @@
       </p>
 
       <p>
-        There is a "Credible Water Source" meeting the current requirements for the
-        Insurance Services Offices, Inc. (ISO).
+        ${credibleWaterText}
       </p>
 
       <p>
@@ -841,4 +845,5 @@
   <div id="viewDiv"></div>
 </body>
 </html>
+
 

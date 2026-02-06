@@ -149,7 +149,8 @@
         ENGINE_GAL: "Engine - gallon",
         TANKER_GAL: "Tanker - gallon",
         BRUSHTANKE: "Brush Tanker - gallon",
-        LADDER: "Ladder - gallon"
+        LADDER: "Ladder - gallon",
+        SUPERTANKE: "Supertanker - gallon"
       };
 
       // Optional: adjust to customer extent
@@ -219,7 +220,7 @@
           "COMPANY", "NAME", "ADDRESS", "CITY", "PHONE",
           "APPARATUS", "JURISDICTI",
           "ENGINE_GAL", "TANKER_GAL", "BRUSHTANKE", "LADDER",
-          "FIRST_RESP"
+          "FIRST_RESP", "SUPERTANKE"
         ],
         visible: false
       });
@@ -492,6 +493,7 @@
               <div><b>${FIELD_LABELS.TANKER_GAL}:</b> ${escapeHtml(station?.tanker)}</div>
               <div><b>${FIELD_LABELS.BRUSHTANKE}:</b> ${escapeHtml(station?.brushtanker)}</div>
               <div><b>${FIELD_LABELS.LADDER}:</b> ${escapeHtml(station?.ladder)}</div>
+              <div><b>${FIELD_LABELS.SUPERTANKE}:</b> ${escapeHtml(station?.supertanker)}</div>
               <br/>
               <div><b>Driving distance to station:</b> ${escapeHtml(distanceText)}</div>
             </div>
@@ -551,6 +553,7 @@
           tanker: a.TANKER_GAL || null,
           brushtanker: a.BRUSHTANKE || null,
           ladder: a.LADDER || null,
+          supertanker: a.SUPERTANKE || null,
           geometry: f.geometry
         };
       }
@@ -687,7 +690,8 @@
         engine = "",
         tanker = "",
         brushtanker = "",
-        ladder = ""
+        ladder = "",
+        supertanker = ""
       }) {
         const issuedDate = formatDateLong(new Date());
         const distanceText = (miles == null) ? "(distance unavailable)" : `${miles.toFixed(2)} miles`;

@@ -841,6 +841,29 @@
         const addressPoint = evt?.result?.feature?.geometry;
         lastAddressPoint = addressPoint;
 
+      // ==================== NEW VALIDATION ====================
+      const addrType = result?.feature?.attributes?.Addr_type || 
+                       result?.attributes?.Addr_type || "";
+
+      if (addrType !== "PointAddress") {
+        lookupInFlight = false;
+    
+        view.openPopup({
+          title: "Fire Response Lookup",
+          location: addressPoint || view.center,
+          content: `
+            <b>No Such Address</b><br/><br/>
+            The entered address could not be found as a valid house-level address.<br/>
+            Please enter a complete street address (e.g., 123 Main St, Kissimmee, FL).
+          `
+        });
+    
+        // Optional: clear the search box
+        searchWidget.clear();
+        return;
+      }
+      // =======================================================
+
         if (!addressPoint) {
           lookupInFlight = false;
           lastAddressPoint = null;

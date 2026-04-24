@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="initial-scale=1,maximum-scale=1,user-scalable=no">
-  <title>Query by Address + Driving Distance Polygon</title>
+  <title>Query by Address + Driving Distance</title>
   <link rel="stylesheet" href="https://js.arcgis.com/4.31/esri/themes/light/main.css">
   <style>
     html, body, #viewDiv { padding:0; margin:0; height:100%; width:100%; }
@@ -59,33 +59,22 @@
       "esri/Map", "esri/views/MapView", "esri/widgets/LayerList",
       "esri/layers/GraphicsLayer", "esri/layers/FeatureLayer",
       "esri/Graphic", "esri/symbols/SimpleFillSymbol", "esri/symbols/SimpleMarkerSymbol",
-      "esri/tasks/Locator", "esri/tasks/ServiceAreaTask", "esri/tasks/support/ServiceAreaParameters",
-      "esri/tasks/support/FeatureSet", "esri/config",
-      "esri/core/reactiveUtils"
+      "esri/rest/locator", "esri/rest/serviceArea", "esri/rest/support/ServiceAreaParameters",
+      "esri/rest/support/FeatureSet", "esri/config"
     ], function(
       Map, MapView, LayerList,
       GraphicsLayer, FeatureLayer,
       Graphic, SimpleFillSymbol, SimpleMarkerSymbol,
-      Locator, ServiceAreaTask, ServiceAreaParameters,
-      FeatureSet, esriConfig, reactiveUtils
+      locator, serviceArea, ServiceAreaParameters,
+      FeatureSet, esriConfig
     ) {
 
-      // ========================== CONFIGURATION ==========================
       const config = {
-        // Main point layer to query (same as your previous apps)
         queryLayerUrl: "https://services1.arcgis.com/ejbgqcCL0yNBugWr/arcgis/rest/services/fire_zones_stations/FeatureServer/1",
-
-        // Backdrop (optional - you can leave as-is or change)
         backdropLayerUrl: "https://services1.arcgis.com/ejbgqcCL0yNBugWr/arcgis/rest/services/fire_zones_stations/FeatureServer/0",
 
         filterFields: ["STAFF", "APPARATUS"],
-
-        // Predefined values (optional - speeds up large layers)
-        predefinedFilters: {
-          "STAFF": [],
-          "APPARATUS": []
-        },
-
+        predefinedFilters: { "STAFF": [], "APPARATUS": [] },
         displayFields: [
           { name: "NAME", label: "Station Name" },
           { name: "COMPANY", label: "Company" },
@@ -93,317 +82,93 @@
           { name: "APPARATUS", label: "Apparatus" }
         ],
 
-        // === NEW: Geocoding & Network Analysis Settings ===
-        apiKey: "AAPTaMBm8u2ty8SIqSbFzFjcZFA..xW9B6dwGWRq8BZZ_hPuk7UcgXTwVpEMNxSeFRl25mes2m0CGyMyaw9io_Hy_0PNRLiD5H0H8tU06XilEyY67lN3L8IHvonRFfYDBiOVHzBEk1RDJw8OzmfCPRoYvC0Lzr6U-gr0x4ARIWX52MFfjuHLe8N5vcdtUQRNCOjFPFjoXN8WAjLZBjz25Ccyjrvh4Om5znJcfHCPql5aexng27E2KCow2c1LA-QIx3hyQXrf1dJJb2tZpE3AVQXGoheA-9Q..AT1_iqoDCp4v",
+        apiKey: "AAPTaMBm8u2ty8SIqSbFzFjcZFA..xW9B6dwGWRq8BZZ_hPuk7UcgXTwVpEMNxSeFRl25mes2m0CGyMyaw9io_Hy_0PNRLiD5H0H8tU06XilEyY67lN3L8IHvonRFfYDBiOVHzBEk1RDJw8OzmfCPRoYvC0Lzr6U-gr0x4ARIWX52MFfjuHLe8N5vcdtUQRNCOjFPFjoXN8WAjLZBjz25Ccyjrvh4Om5znJcfHCPql5aexng27E2KCow2c1LA-QIx3hyQXrf1dJJb2tZpE3AVQXGoheA-9Q..AT1_iqoDCp4v",   // ← Change this to your real key later
 
         geocodingUrl: "https://geocode-api.arcgis.com/arcgis/rest/services/World/GeocodeServer",
-        serviceAreaUrl: "https://route-api.arcgis.com/arcgis/rest/services/World/ServiceAreas/NAServer/ServiceArea_World",
-
-        initialExtent: {
-          xmin: -92.5, ymin: 31.0,
-          xmax: -88.5, ymax: 34.5,
-          spatialReference: { wkid: 4326 }
-        }
+        serviceAreaUrl: "https://route-api.arcgis.com/arcgis/rest/services/World/ServiceAreas/NAServer/ServiceArea_World"
       };
-      // ================================================================
 
-      // Set global API key (required for ArcGIS Online services)
-      if (config.apiKey) {
+      if (config.apiKey && config.apiKey !== "xyz") {
         esriConfig.apiKey = config.apiKey;
       }
 
       const map = new Map({ basemap: "topo-vector" });
+      const view = new MapView({ container: "viewDiv", map: map, center: [-81.5, 28.5], zoom: 8 });
 
-      const view = new MapView({
-        container: "viewDiv",
-        map: map,
-        extent: config.initialExtent
-      });
-
-      const graphicsLayer = new GraphicsLayer({ title: "Highlights & Drive Polygon" });
-      const backdropLayer = new FeatureLayer({ url: config.backdropLayerUrl, title: "Backdrop", opacity: 0.4 });
-      const queryLayer = new FeatureLayer({ url: config.queryLayerUrl, outFields: ["*"], title: "Query Layer" });
+      const graphicsLayer = new GraphicsLayer();
+      const backdropLayer = new FeatureLayer({ url: config.backdropLayerUrl, opacity: 0.4 });
+      const queryLayer = new FeatureLayer({ url: config.queryLayerUrl, outFields: ["*"] });
 
       map.add(backdropLayer);
       map.add(queryLayer);
       map.add(graphicsLayer);
 
-      let currentDrivePolygon = null;     // the polygon created from driving distance
+      let currentDrivePolygon = null;
       let selectionGraphics = [];
-      let currentPopupGraphic = null;
 
       function updateStatus(msg, color = "#0066cc") {
         const el = document.getElementById("status");
         el.style.color = color;
         el.innerHTML = msg;
-        console.log("[Status]", msg);
       }
 
-      // Create UI (address input + distance + attribute filters)
       function createUI() {
         const container = document.getElementById("filters");
         container.innerHTML = `
           <div class="input-group">
             <h3>Address</h3>
-            <input type="text" id="addressInput" placeholder="e.g. 123 Main St, Kissimmee, FL" value="1 Courthouse Square, Kissimmee, FL">
+            <input type="text" id="addressInput" value="1 Courthouse Square, Kissimmee, FL">
           </div>
-
           <div class="input-group">
             <h3>Driving Distance (miles)</h3>
             <input type="number" id="distanceInput" value="5" min="0.1" step="0.1">
           </div>
 
-          <button id="createDriveBtn" class="esri-button" style="background:#28a745;color:white;width:100%;margin-bottom:20px;">
+          <button id="createDriveBtn" class="esri-button" style="background:#28a745;color:white;width:100%;margin-bottom:15px;">
             Geocode &amp; Create Drive Polygon
           </button>
-
-          <!-- Attribute filters -->
-          ${config.filterFields.map(field => `
-            <div style="margin-bottom:18px;">
-              <h3>${field}</h3>
-              <select id="select_${field}" multiple size="6"></select>
-            </div>
-          `).join('')}
         `;
+
+        config.filterFields.forEach(field => {
+          const div = document.createElement("div");
+          div.style.marginBottom = "18px";
+          div.innerHTML = `<h3>${field}</h3><select id="select_${field}" multiple size="6"></select>`;
+          container.appendChild(div);
+        });
       }
 
-      // Populate attribute filters
-      async function populateAttributeFilters() {
+      async function populateFilters() {
         for (const field of config.filterFields) {
           const select = document.getElementById(`select_${field}`);
-          const predefined = config.predefinedFilters && config.predefinedFilters[field];
-
-          if (predefined && predefined.length > 0) {
-            select.innerHTML = predefined.map(v => `<option value="${v}">${v}</option>`).join('');
-          } else {
-            try {
-              const q = queryLayer.createQuery();
-              q.outFields = [field];
-              q.returnDistinctValues = true;
-              const result = await queryLayer.queryFeatures(q);
-              const values = [...new Set(result.features.map(f => f.attributes[field]).filter(v => v != null && v !== ""))].sort();
-              select.innerHTML = values.map(v => `<option value="${v}">${v}</option>`).join('');
-            } catch (err) {
-              console.error(`Failed to load ${field}`, err);
-            }
+          if (config.predefinedFilters[field] && config.predefinedFilters[field].length > 0) {
+            select.innerHTML = config.predefinedFilters[field].map(v => `<option value="${v}">${v}</option>`).join('');
           }
         }
       }
 
-      // Create driving distance polygon
       async function createDrivePolygon() {
         const address = document.getElementById("addressInput").value.trim();
         const distanceMiles = parseFloat(document.getElementById("distanceInput").value);
 
-        if (!address) {
-          alert("Please enter an address.");
-          return;
-        }
-        if (!distanceMiles || distanceMiles <= 0) {
-          alert("Please enter a valid driving distance.");
-          return;
-        }
+        if (!address) return alert("Please enter an address");
 
-        if (!config.apiKey) {
-          alert("Please set your ArcGIS Online API Key in the config section.");
-          return;
-        }
-
-        updateStatus("Geocoding address...");
-
-        const locator = new Locator({ url: config.geocodingUrl });
+        updateStatus("Geocoding...");
 
         try {
-          // Step 1: Geocode address
-          const candidates = await locator.addressToLocations({
-            location: null,
+          const candidates = await locator.addressToLocations(config.geocodingUrl, {
             singleLine: address,
-            maxLocations: 1,
-            outFields: ["*"]
+            maxLocations: 1
           });
 
-          if (!candidates || candidates.length === 0) {
-            updateStatus("Address not found.", "#cc0000");
-            return;
-          }
+          if (candidates.length === 0) throw new Error("Address not found");
 
           const point = candidates[0].location;
 
-          // Show the geocoded point
-          graphicsLayer.removeAll(); // clear old graphics
-          const pointGraphic = new Graphic({
-            geometry: point,
-            symbol: new SimpleMarkerSymbol({ color: [0, 0, 255, 0.9], size: 12 })
-          });
-          graphicsLayer.add(pointGraphic);
+          graphicsLayer.removeAll();
+          graphicsLayer.add(new Graphic({ geometry: point, symbol: new SimpleMarkerSymbol({ color: "blue", size: 12 }) }));
+          view.goTo(point);
 
-          view.goTo(point, { duration: 800 });
-
-          updateStatus("Creating driving distance polygon...");
-
-          // Step 2: Create Service Area (driving distance)
-          const serviceAreaTask = new ServiceAreaTask({ url: config.serviceAreaUrl });
+          updateStatus("Creating drive polygon...");
 
           const params = new ServiceAreaParameters({
-            facilities: new FeatureSet({ features: [new Graphic({ geometry: point })] }),
-            defaultBreaks: [distanceMiles],
-            travelMode: "Driving Distance",           // or use travelMode object if needed
-            travelDirection: "from-facility",
-            outSpatialReference: { wkid: 102100 },
-            trimOuterPolygon: true
-          });
-
-          const serviceAreaResult = await serviceAreaTask.solve(params);
-
-          if (serviceAreaResult.serviceAreaPolygons && serviceAreaResult.serviceAreaPolygons.features.length > 0) {
-            currentDrivePolygon = serviceAreaResult.serviceAreaPolygons.features[0].geometry;
-
-            // Display the drive polygon
-            const polyGraphic = new Graphic({
-              geometry: currentDrivePolygon,
-              symbol: new SimpleFillSymbol({
-                color: [0, 123, 255, 0.25],
-                outline: { color: [0, 123, 255], width: 3 }
-              })
-            });
-            graphicsLayer.add(polyGraphic);
-
-            updateStatus(`✅ Drive polygon created (${distanceMiles} miles)`, "#28a745");
-            console.log("Drive polygon ready for query.");
-          } else {
-            updateStatus("Failed to create drive polygon.", "#cc0000");
-          }
-        } catch (err) {
-          console.error(err);
-          updateStatus("Error: " + (err.message || err), "#cc0000");
-        }
-      }
-
-      // Same query logic as your previous apps
-      function buildWhereClause() {
-        let where = "1=1";
-        config.filterFields.forEach(field => {
-          const select = document.getElementById(`select_${field}`);
-          if (!select) return;
-          const selected = Array.from(select.selectedOptions).map(opt => opt.value);
-          if (selected.length > 0) {
-            where += ` AND ${field} IN ('${selected.join("','")}')`;
-          }
-        });
-        return where;
-      }
-
-      function runQuery() {
-        if (!currentDrivePolygon) {
-          alert("Please create a driving distance polygon first.");
-          return;
-        }
-
-        const where = buildWhereClause();
-
-        const q = queryLayer.createQuery();
-        q.geometry = currentDrivePolygon;
-        q.spatialRelationship = "intersects";
-        q.where = where;
-        q.returnGeometry = true;
-        q.outFields = ["*"];
-
-        queryLayer.queryFeatures(q).then(result => {
-          selectionGraphics.forEach(g => graphicsLayer.remove(g));
-          selectionGraphics = [];
-
-          document.getElementById("count").textContent = result.features.length;
-          updateStatus(`Found ${result.features.length} features`, "#007ac2");
-
-          const listEl = document.getElementById("featureList");
-          listEl.innerHTML = result.features.length === 0 
-            ? `<p style="color:#666;">No matching features found inside the drive area.</p>`
-            : buildResultsTable(result.features);
-
-          const table = document.getElementById("resultsTable");
-          if (table) {
-            table.addEventListener("click", e => {
-              const row = e.target.closest("tr");
-              if (row && row.dataset.index !== undefined) {
-                const feat = result.features[parseInt(row.dataset.index)];
-                if (feat) zoomToFeature(feat);
-              }
-            });
-          }
-
-          if (result.features.length > 0) view.goTo(result.features, { duration: 800 });
-        }).catch(err => {
-          console.error(err);
-          updateStatus("Query failed – check console", "#cc0000");
-        });
-      }
-
-      function buildResultsTable(features) {
-        let html = `<table id="resultsTable"><thead><tr>`;
-        config.displayFields.forEach(f => html += `<th>${f.label}</th>`);
-        html += `</tr></thead><tbody>`;
-
-        features.forEach((feat, i) => {
-          const a = feat.attributes;
-          html += `<tr data-index="${i}">`;
-          config.displayFields.forEach(f => {
-            html += `<td>${a[f.name] != null ? a[f.name] : '—'}</td>`;
-          });
-          html += `</tr>`;
-
-          const hl = new Graphic({
-            geometry: feat.geometry,
-            symbol: new SimpleMarkerSymbol({ color: [255,0,0,0.85], size: 11, outline: {color: [255,255,255], width: 2} })
-          });
-          graphicsLayer.add(hl);
-          selectionGraphics.push(hl);
-        });
-
-        html += `</tbody></table>`;
-        return html;
-      }
-
-      function zoomToFeature(feature) {
-        if (currentPopupGraphic) graphicsLayer.remove(currentPopupGraphic);
-
-        currentPopupGraphic = new Graphic({
-          geometry: feature.geometry,
-          symbol: new SimpleMarkerSymbol({ color: [0,255,0,0.9], size: 16, outline: {color:"#fff", width:3} })
-        });
-        graphicsLayer.add(currentPopupGraphic);
-
-        view.goTo({target: feature.geometry, zoom: 15}, {duration: 1200});
-
-        setTimeout(() => {
-          if (currentPopupGraphic) graphicsLayer.remove(currentPopupGraphic);
-          currentPopupGraphic = null;
-        }, 4000);
-      }
-
-      // Initialize
-      view.when(() => {
-        const layerList = new LayerList({ view: view });
-        view.ui.add(layerList, "top-right");
-
-        createUI();
-        populateAttributeFilters();
-
-        // Button listeners
-        document.getElementById("createDriveBtn").addEventListener("click", createDrivePolygon);
-        document.getElementById("queryBtn").addEventListener("click", runQuery);
-        document.getElementById("clearBtn").addEventListener("click", () => {
-          graphicsLayer.removeAll();
-          selectionGraphics = [];
-          currentDrivePolygon = null;
-          document.getElementById("count").textContent = "0";
-          document.getElementById("featureList").innerHTML = "";
-        });
-
-        updateStatus("✅ Ready – enter address + distance", "#007ac2");
-      });
-
-      console.log("%c✅ query_address_driving_distance.html loaded (API key placeholder ready)", "color:#007ac2;font-weight:bold");
-    });
-  </script>
-</body>
-</html>
+            facilities: new FeatureSet({ features: [new Graphic({ geometry: point })]

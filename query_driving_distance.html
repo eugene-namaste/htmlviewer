@@ -11,39 +11,29 @@
       position: absolute; top: 10px; left: 10px; width: 420px;
       background: white; box-shadow: 0 0 15px rgba(0,0,0,0.3);
       z-index: 10; padding: 15px; border-radius: 8px;
-      max-height: 92vh; overflow-y: auto; font-family: system-ui, sans-serif;
+      max-height: 92vh; overflow-y: auto;
     }
-    h2, h3 { margin: 8px 0 6px 0; }
-    button { padding: 8px 12px; margin: 5px 2px; font-size: 14px; }
-    select, input { width: 100%; margin-bottom: 10px; padding: 5px; }
-    table { width: 100%; border-collapse: collapse; font-size: 13px; cursor: pointer; }
-    th, td { border: 1px solid #ddd; padding: 7px 6px; text-align: left; }
-    th { background: #f4f4f4; }
-    tr:hover { background-color: #f0f8ff; }
-    #instructions { font-size: 13.5px; line-height: 1.4; color: #444; }
-    #status { font-size: 13px; margin-top: 10px; padding: 8px; border-radius: 4px; background: #f8f8f8; }
-    .input-group { margin-bottom: 16px; }
+    button, input { width: 100%; padding: 9px; margin-bottom: 12px; }
+    #status { padding: 12px; background: #f0f0f0; border-radius: 4px; margin: 10px 0; }
   </style>
 </head>
 <body>
   <div id="viewDiv"></div>
 
   <div id="sidebar">
-    <h2>Address + Driving Distance Query</h2>
-    <div id="instructions">
-      1. Enter an address and driving distance (miles)<br>
+    <h2>Address + Driving Distance</h2>
+    <div id="instructions" style="margin-bottom:15px; font-size:13.5px;">
+      1. Enter address + distance<br>
       2. Click "Create Drive Polygon"<br>
-      3. (Optional) Select STAFF / APPARATUS filters<br>
-      4. Click "Find Features Inside Drive Area"
+      3. Click "Find Features"
     </div>
 
-    <button id="clearBtn" class="esri-button">Clear All</button>
+    <button id="clearBtn">Clear All</button>
 
     <div id="filters"></div>
 
-    <button id="queryBtn" class="esri-button" style="background:#007ac2;color:white;width:100%;margin:12px 0;">
-      Find Features Inside Drive Area
-    </button>
+    <button id="createDriveBtn" style="background:#28a745;color:white;">Geocode &amp; Create Drive Polygon</button>
+    <button id="queryBtn" style="background:#007ac2;color:white;margin-top:8px;">Find Features Inside Drive Area</button>
 
     <div id="results">
       <h3>Results: <span id="count">0</span> features</h3>
@@ -56,99 +46,53 @@
   <script src="https://js.arcgis.com/4.31/"></script>
   <script>
     require([
-      "esri/Map", "esri/views/MapView", "esri/widgets/LayerList",
+      "esri/Map", "esri/views/MapView",
       "esri/layers/GraphicsLayer", "esri/layers/FeatureLayer",
       "esri/Graphic", "esri/symbols/SimpleFillSymbol", "esri/symbols/SimpleMarkerSymbol",
       "esri/rest/locator", "esri/rest/serviceArea", "esri/rest/support/ServiceAreaParameters",
       "esri/rest/support/FeatureSet", "esri/config"
     ], function(
-      Map, MapView, LayerList,
+      Map, MapView,
       GraphicsLayer, FeatureLayer,
       Graphic, SimpleFillSymbol, SimpleMarkerSymbol,
-      locator, serviceArea, ServiceAreaParameters,
-      FeatureSet, esriConfig
+      locator, serviceArea, ServiceAreaParameters, FeatureSet, esriConfig
     ) {
 
       const config = {
         queryLayerUrl: "https://services1.arcgis.com/ejbgqcCL0yNBugWr/arcgis/rest/services/fire_zones_stations/FeatureServer/1",
-        backdropLayerUrl: "https://services1.arcgis.com/ejbgqcCL0yNBugWr/arcgis/rest/services/fire_zones_stations/FeatureServer/0",
-
-        filterFields: ["STAFF", "APPARATUS"],
-        predefinedFilters: { "STAFF": [], "APPARATUS": [] },
-        displayFields: [
-          { name: "NAME", label: "Station Name" },
-          { name: "COMPANY", label: "Company" },
-          { name: "STAFF", label: "Staff" },
-          { name: "APPARATUS", label: "Apparatus" }
-        ],
-
-        apiKey: "AAPTaMBm8u2ty8SIqSbFzFjcZFA..xW9B6dwGWRq8BZZ_hPuk7UcgXTwVpEMNxSeFRl25mes2m0CGyMyaw9io_Hy_0PNRLiD5H0H8tU06XilEyY67lN3L8IHvonRFfYDBiOVHzBEk1RDJw8OzmfCPRoYvC0Lzr6U-gr0x4ARIWX52MFfjuHLe8N5vcdtUQRNCOjFPFjoXN8WAjLZBjz25Ccyjrvh4Om5znJcfHCPql5aexng27E2KCow2c1LA-QIx3hyQXrf1dJJb2tZpE3AVQXGoheA-9Q..AT1_iqoDCp4v",   // ← Change this to your real key later
+        apiKey: "AAPTaMBm8u2ty8SIqSbFzFjcZFA..xW9B6dwGWRq8BZZ_hPuk7UcgXTwVpEMNxSeFRl25mes2m0CGyMyaw9io_Hy_0PNRLiD5H0H8tU06XilEyY67lN3L8IHvonRFfYDBiOVHzBEk1RDJw8OzmfCPRoYvC0Lzr6U-gr0x4ARIWX52MFfjuHLe8N5vcdtUQRNCOjFPFjoXN8WAjLZBjz25Ccyjrvh4Om5znJcfHCPql5aexng27E2KCow2c1LA-QIx3hyQXrf1dJJb2tZpE3AVQXGoheA-9Q..AT1_iqoDCp4v",   // ←←← PUT YOUR REAL KEY HERE
 
         geocodingUrl: "https://geocode-api.arcgis.com/arcgis/rest/services/World/GeocodeServer",
         serviceAreaUrl: "https://route-api.arcgis.com/arcgis/rest/services/World/ServiceAreas/NAServer/ServiceArea_World"
       };
 
-      if (config.apiKey && config.apiKey !== "xyz") {
+      // Set API Key
+      if (config.apiKey && config.apiKey !== "YOUR_ARCGIS_API_KEY_HERE") {
         esriConfig.apiKey = config.apiKey;
       }
 
       const map = new Map({ basemap: "topo-vector" });
-      const view = new MapView({ container: "viewDiv", map: map, center: [-81.5, 28.5], zoom: 8 });
+      const view = new MapView({ container: "viewDiv", map: map, center: [-81.37, 28.29], zoom: 9 });
 
       const graphicsLayer = new GraphicsLayer();
-      const backdropLayer = new FeatureLayer({ url: config.backdropLayerUrl, opacity: 0.4 });
-      const queryLayer = new FeatureLayer({ url: config.queryLayerUrl, outFields: ["*"] });
-
-      map.add(backdropLayer);
-      map.add(queryLayer);
       map.add(graphicsLayer);
 
       let currentDrivePolygon = null;
-      let selectionGraphics = [];
 
-      function updateStatus(msg, color = "#0066cc") {
-        const el = document.getElementById("status");
-        el.style.color = color;
-        el.innerHTML = msg;
+      function updateStatus(msg) {
+        document.getElementById("status").textContent = msg;
       }
 
-      function createUI() {
-        const container = document.getElementById("filters");
-        container.innerHTML = `
-          <div class="input-group">
-            <h3>Address</h3>
-            <input type="text" id="addressInput" value="1 Courthouse Square, Kissimmee, FL">
-          </div>
-          <div class="input-group">
-            <h3>Driving Distance (miles)</h3>
-            <input type="number" id="distanceInput" value="5" min="0.1" step="0.1">
-          </div>
-
-          <button id="createDriveBtn" class="esri-button" style="background:#28a745;color:white;width:100%;margin-bottom:15px;">
-            Geocode &amp; Create Drive Polygon
-          </button>
-        `;
-
-        config.filterFields.forEach(field => {
-          const div = document.createElement("div");
-          div.style.marginBottom = "18px";
-          div.innerHTML = `<h3>${field}</h3><select id="select_${field}" multiple size="6"></select>`;
-          container.appendChild(div);
-        });
-      }
-
-      async function populateFilters() {
-        for (const field of config.filterFields) {
-          const select = document.getElementById(`select_${field}`);
-          if (config.predefinedFilters[field] && config.predefinedFilters[field].length > 0) {
-            select.innerHTML = config.predefinedFilters[field].map(v => `<option value="${v}">${v}</option>`).join('');
-          }
-        }
-      }
+      document.getElementById("filters").innerHTML = `
+        <h3>Address</h3>
+        <input type="text" id="addressInput" value="1163 Liberty Hall Dr, Kissimmee, FL 34746">
+        <h3>Driving Distance (miles)</h3>
+        <input type="number" id="distanceInput" value="5" min="0.1" step="0.1">
+      `;
 
       async function createDrivePolygon() {
         const address = document.getElementById("addressInput").value.trim();
-        const distanceMiles = parseFloat(document.getElementById("distanceInput").value);
+        const distance = parseFloat(document.getElementById("distanceInput").value);
 
         if (!address) return alert("Please enter an address");
 
@@ -171,4 +115,34 @@
           updateStatus("Creating drive polygon...");
 
           const params = new ServiceAreaParameters({
-            facilities: new FeatureSet({ features: [new Graphic({ geometry: point })]
+            facilities: new FeatureSet({ features: [new Graphic({ geometry: point })] }),
+            defaultBreaks: [distance],
+            travelMode: "Driving Distance"
+          });
+
+          const result = await serviceArea.solve(config.serviceAreaUrl, params);
+
+          if (result.serviceAreaPolygons.features.length > 0) {
+            currentDrivePolygon = result.serviceAreaPolygons.features[0].geometry;
+
+            graphicsLayer.add(new Graphic({
+              geometry: currentDrivePolygon,
+              symbol: new SimpleFillSymbol({ color: [0,123,255,0.25], outline: {color:[0,123,255], width:3} })
+            }));
+
+            updateStatus(`✅ Drive polygon created (${distance} miles)`);
+          }
+        } catch (err) {
+          console.error(err);
+          updateStatus("Error: " + err.message);
+        }
+      }
+
+      document.getElementById("createDriveBtn").addEventListener("click", createDrivePolygon);
+      document.getElementById("clearBtn").addEventListener("click", () => graphicsLayer.removeAll());
+
+      view.when(() => updateStatus("✅ Ready"));
+    });
+  </script>
+</body>
+</html>
